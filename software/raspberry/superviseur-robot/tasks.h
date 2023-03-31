@@ -69,6 +69,7 @@ private:
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
     int arena_confirm ;
+    int imgType = 1; //0 for classic image acquisition, 1 for acquisition with position
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -84,6 +85,7 @@ private:
     RT_TASK th_stopCamera;
     RT_TASK th_setupArena;
     RT_TASK th_robotPosition;
+    RT_TASK th_stopPosition;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -94,6 +96,7 @@ private:
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_camera;
     RT_MUTEX mutex_arena;
+    RT_MUTEX mutex_imageType;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -107,6 +110,7 @@ private:
     RT_SEM sem_setupArena;
     RT_SEM sem_confirmArena;
     RT_SEM sem_robotPosition;
+    RT_SEM sem_stopPosition;
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -174,6 +178,8 @@ private:
     void SetupArena(void * arg);
     
     void RobotPosition(void * arg);
+
+    void StopPosition(void * arg);
 
 };
 

@@ -81,12 +81,15 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    /* 
-     if (err = rt_mutex_create(&mutex_camera, NULL)) {
+    if (err = rt_mutex_create(&mutex_camera, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-     */
+    if (err = rt_mutex_create(&mutex_imageType, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
     cout << "Mutexes created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -125,6 +128,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_sem_create(&sem_robotPosition, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_stopPosition, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -173,7 +180,11 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_create(&th_setupArena, "th_robotPosition", 0, PRIORITY_TPOSITION, 0)) {
+    if (err = rt_task_create(&th_robotPosition, "th_robotPosition", 0, PRIORITY_TPOSITION, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_stopPosition, "th_stopPosition", 0, PRIORITY_TPOSITION, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -235,6 +246,14 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_start(&th_setupArena, (void(*)(void*)) & Tasks::SetupArena, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_robotPosition, (void(*)(void*)) & Tasks::RobotPosition, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_stopPosition, (void(*)(void*)) & Tasks::StopPosition, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -362,6 +381,9 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         }
         else if (msgRcv ->CompareID(MESSAGE_CAM_COMPUTE_START)) {
             rt_sem_v(&sem_robotPosition);
+        }
+        else if (msgRcv ->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)) {
+            rt_sem_v(&sem_stopPosition);
         }
         delete(msgRcv); // mus be deleted manually, no consumer
     }
@@ -640,26 +662,47 @@ void Task::RobotPosition(void * arg) {
     out << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
-    //Fonctionnalité 18
+    // Fonctionnalité 18
     std::list<Position> robotPos;
     while (1) {
         rt_sem_p(&sem_robotPosition,TM_INFINITE);
+        rt_task_set_periodic(NULL,TM_NOW,100000000);
+        rt_mutex_acquire(&mutex_imageType,TM_INFINITE);
+        imageType = 1;
+        rt_mutex_release(&mutex_imageType);
+        rt_mutex_acquire(&mutex_camera,TM_INFINITE);
         while (1) {
+            if(imageType == 0){ break;}
+            rt_task_wait_period(NULL);
             Img * img = new Img(camera.Grab());
             robotPos = img->SearchRobot(arena);
             if (robotPos!=NULL) {
                 img->DrawRobot(robotPos);
-                MessagePosition *msgPos = new MessagePosition(MESSAGE_CAM_POSITION, img);
-                rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
-                monitor.write(msgPos);
-                rt_mutex_release(&mutex_monitor);
+                MessagePosition *msgPos = new MessagePosition(MESSAGE_CAM_POSITION, robotPos);
             } else {
-                //envoi position nulle
+                MessagePosition *msgPos = new MessagePosition(MESSAGE_CAM_POSITION, (-1,1));
             }
+            rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
+            monitor.write(msgPos);
+            rt_mutex_release(&mutex_monitor);
             MessageImg *msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
             rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
             monitor.write(msgImg);
             rt_mutex_release(&mutex_monitor);
         }
+        rt_mutex_release(&mutex_camera);
+    }
+}
+
+void Task::StopPosition(void * arg) {
+    out << "Start" << __PRETTY_FUNCTION__ << endl << flush;
+    //Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    // Fonctionnalité 19
+    while(1) {
+        rt_sem_p(&sem_stopPosition, TM_INFINITE);
+        rt_mutex_acquire(&mutex_imageType,TM_INFINITE);
+        imageType = 0;
+        rt_mutex_release(&mutex_imageType,TM_INFINITE);
     }
 }
