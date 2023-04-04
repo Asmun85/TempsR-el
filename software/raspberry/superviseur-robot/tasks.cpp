@@ -366,8 +366,12 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_mutex_acquire(&mutex_move, TM_INFINITE);
             move = msgRcv->GetID();
             rt_mutex_release(&mutex_move);
-        } else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
+        }
+        else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
             rt_sem_v(&sem_openCamera);
+        }
+        else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) {
+            rt_sem_v(&sem_stopCamera);
         }
         else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
             rt_sem_v(&sem_setupArena);
@@ -379,7 +383,7 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_mutex_release(&mutex_arena);
             rt_sem_v(&sem_confirmArena);
         }
-        else if (msgRcv ->CompareID(MESSAGE_CAM_COMPUTE_START)) {
+        else if (msgRcv ->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
             rt_sem_v(&sem_robotPosition);
         }
         else if (msgRcv ->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)) {
@@ -568,7 +572,9 @@ void Tasks::ManageCamera(void * arg){
         // Fonctionnalité 14
         rt_sem_p(&sem_openCamera,TM_INFINITE);
         cout << "Trying to open Camera" << endl << flush;
+        rt_mutex_acquire(&mutex_camera,TM_INFINITE);
         isOpen=camera.Open();
+        rt_mutex_release(&mutex_camera);
         if (!isOpen){
             cout << "ERROR : Camera could not open" << endl << flush;
             rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
@@ -589,6 +595,11 @@ void Tasks::ManageCamera(void * arg){
             cout << "Periodic image acquisition" << endl << flush;
             rt_mutex_acquire(&mutex_camera,TM_INFINITE);
             Img * img = new Img(camera.Grab());
+            if(!arena.IsEmpty()) {
+                rt_mutex_acquire(&mutex_arena,TM_INFINITE);
+                img ->DrawArena(arena);
+                rt_mutex_release(&mutex_arena);                       
+            }
             MessageImg *msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
             rt_mutex_release(&mutex_camera);
             rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
@@ -608,9 +619,11 @@ void Tasks::StopCamera(void * arg){
         // Fonctionnalité 16
         rt_sem_p(&sem_stopCamera,TM_INFINITE);
         cout << "Trying to close Camera" << endl << flush;
+        rt_mutex_acquire(&mutex_camera,TM_INFINITE);
         camera.Close();
+        rt_mutex_release(&mutex_camera);
         isOpen= camera.IsOpen();
-        if (!isOpen){
+        if (isOpen){
             cout << "ERROR : Camera could not close" << endl << flush;
             rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
             monitor.Write(new Message(MESSAGE_ANSWER_NACK));
@@ -650,6 +663,7 @@ void Tasks::SetupArena(void * arg){
             int rcvArena = arena_confirm;
             rt_mutex_release(&mutex_arena);
             if (rcvArena == MESSAGE_CAM_ARENA_CONFIRM) {
+                cout << "SUCCESS : Confirming Arena" << endl << flush;
                 arena = foundArena;
             } else if (rcvArena == MESSAGE_CAM_ARENA_INFIRM){
             }
@@ -658,51 +672,58 @@ void Tasks::SetupArena(void * arg){
     }
 }
 
-void Task::RobotPosition(void * arg) {
-    out << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+void Tasks::RobotPosition(void * arg) {
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
     // Fonctionnalité 18
     std::list<Position> robotPos;
+
     while (1) {
         rt_sem_p(&sem_robotPosition,TM_INFINITE);
         rt_task_set_periodic(NULL,TM_NOW,100000000);
         rt_mutex_acquire(&mutex_imageType,TM_INFINITE);
-        imageType = 1;
+        imgType = 1;
         rt_mutex_release(&mutex_imageType);
         rt_mutex_acquire(&mutex_camera,TM_INFINITE);
+        cout << "SUCCESS : Position enabled" << endl << flush;
         while (1) {
-            if(imageType == 0){ break;}
+            if(imgType == 0){ break;}
             rt_task_wait_period(NULL);
             Img * img = new Img(camera.Grab());
             robotPos = img->SearchRobot(arena);
-            if (robotPos!=NULL) {
-                img->DrawRobot(robotPos);
-                MessagePosition *msgPos = new MessagePosition(MESSAGE_CAM_POSITION, robotPos);
-            } else {
-                MessagePosition *msgPos = new MessagePosition(MESSAGE_CAM_POSITION, (-1,1));
+            if (!robotPos.empty()) {
+                Position robot1 = robotPos.front();
+                img->DrawRobot(robot1);
+                MessagePosition *msgPos = new MessagePosition(MESSAGE_CAM_POSITION, robot1);
+                rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
+                monitor.Write(msgPos);
+                rt_mutex_release(&mutex_monitor);
             }
-            rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
-            monitor.write(msgPos);
-            rt_mutex_release(&mutex_monitor);
+            if(!arena.IsEmpty()) {
+                rt_mutex_acquire(&mutex_arena,TM_INFINITE);
+                img ->DrawArena(arena);
+                rt_mutex_release(&mutex_arena);                       
+            }
             MessageImg *msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
             rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
-            monitor.write(msgImg);
+            monitor.Write(msgImg);
             rt_mutex_release(&mutex_monitor);
         }
         rt_mutex_release(&mutex_camera);
     }
 }
 
-void Task::StopPosition(void * arg) {
-    out << "Start" << __PRETTY_FUNCTION__ << endl << flush;
+void Tasks::StopPosition(void * arg) {
+    cout << "Start" << __PRETTY_FUNCTION__ << endl << flush;
     //Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
     // Fonctionnalité 19
     while(1) {
         rt_sem_p(&sem_stopPosition, TM_INFINITE);
         rt_mutex_acquire(&mutex_imageType,TM_INFINITE);
-        imageType = 0;
-        rt_mutex_release(&mutex_imageType,TM_INFINITE);
+        imgType = 0;
+        rt_mutex_release(&mutex_imageType);
+        cout << "SUCCESS : Position disabled" << endl << flush;
     }
 }
